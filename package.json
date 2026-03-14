@@ -1,0 +1,15 @@
+{
+  "name": "pi-custom-compactor",
+  "version": "0.1.0",
+  "type": "module",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "dependencies": {
+    "yaml": "^2.7.1"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*"
+  }
+}
