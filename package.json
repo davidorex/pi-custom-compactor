@@ -3,13 +3,16 @@
   "version": "0.1.0",
   "type": "module",
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "dependencies": {
     "yaml": "^2.7.1"
   },
   "devDependencies": {
+    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-ai": "*"
+    "typescript": "^5.9.3"
   }
 }
