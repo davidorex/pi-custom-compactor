@@ -96,7 +96,7 @@ function isGrowing(values: number[]): boolean {
 /**
  * Format a number for display: use k suffix for >= 1000, otherwise comma-separated.
  */
-function formatNumber(n: number): string {
+export function formatNumber(n: number): string {
   if (n >= 1000) {
     const k = n / 1000;
     // Use one decimal if not whole
