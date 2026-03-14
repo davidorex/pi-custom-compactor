@@ -41,6 +41,46 @@ export default function (pi: ExtensionAPI) {
   // Mutable state for event bus override
   let activeSpecOverride: string | null = null;
 
+  // ─── Hook 0: session_start — bootstrap seed specs on first use ──────
+  pi.on("session_start", async (_event, ctx) => {
+    try {
+      // Check if any spec exists via resolution
+      const existing = resolveSpec(ctx.cwd);
+      if (existing) return; // Already configured, don't touch
+
+      // Check if .pi/compaction/ directory exists (user may have set up but with invalid specs)
+      const compactionDir = path.join(ctx.cwd, ".pi", "compaction");
+      if (fs.existsSync(compactionDir)) return; // Directory exists, user is managing it
+
+      // Bootstrap: copy seeds to .pi/compaction/
+      const seedsDir = new URL("../seeds", import.meta.url).pathname;
+      if (!fs.existsSync(seedsDir)) return; // Seeds not found (shouldn't happen)
+
+      fs.mkdirSync(compactionDir, { recursive: true });
+
+      const seedFiles = fs
+        .readdirSync(seedsDir)
+        .filter((f) => f.endsWith(".yaml"));
+      for (const file of seedFiles) {
+        const src = path.join(seedsDir, file);
+        const dest = path.join(compactionDir, file);
+        fs.copyFileSync(src, dest);
+      }
+
+      // Set default as active
+      writeActivePointer(ctx.cwd, "default");
+
+      ctx.ui.notify(
+        `Compaction specs initialized in .pi/compaction/ (active: default)\n` +
+          `Available: ${seedFiles.map((f) => f.replace(/\.yaml$/, "")).join(", ")}\n` +
+          `Switch with /compaction-use <name>`,
+        "info",
+      );
+    } catch {
+      // Bootstrap is best-effort, don't crash
+    }
+  });
+
   // Event bus listener for workflow integration
   pi.events.on("workflow:compaction", (data: unknown) => {
     if (data && typeof data === "object" && "spec" in data && typeof (data as any).spec === "string") {
