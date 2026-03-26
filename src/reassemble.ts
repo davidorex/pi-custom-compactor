@@ -287,6 +287,10 @@ export function buildStatsSummary(
 /**
  * Build the compaction summary text for CompactionEntry.summary.
  * Composes artifact content as tagged sections, optionally including previous summary.
+ *
+ * Reads artifacts from disk and applies the reassembly budget (if configured)
+ * via enforceBudget() so that the composed summary respects the same token
+ * limits as the context hook path.
  */
 export function composeSummary(
   spec: CompactionSpec,
@@ -296,15 +300,16 @@ export function composeSummary(
   const sections: string[] = [];
 
   if (spec.reassemble) {
-    for (const source of spec.reassemble.sources) {
-      const filePath = resolveArtifactPath(source.source, cwd);
-      let data: string;
-      try {
-        data = fs.readFileSync(filePath, "utf-8");
-      } catch {
-        continue;
-      }
-      sections.push(`${source.as}\n\n<${source.wrap}>\n${data}\n</${source.wrap}>`);
+    // Load artifacts the same way readReassemblyArtifacts does, then budget-enforce
+    const loaded = readReassemblyArtifacts(spec, cwd);
+    const budgeted = enforceBudget(
+      loaded,
+      spec.reassemble.budget,
+      spec.reassemble.overflow,
+    );
+
+    for (const artifact of budgeted.artifacts) {
+      sections.push(`${artifact.as}\n\n<${artifact.wrap}>\n${artifact.data}\n</${artifact.wrap}>`);
     }
   }
 
