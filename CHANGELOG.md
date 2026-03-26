@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.1.1
+
+
+### 🩹 Fixes
+
+- CJK-aware token estimation — addresses pi-mono#2562 ([#2562](https://github.com/davidorex/pi-custom-compactor/issues/2562))
+
+### ❤️ Contributors
+
+- David Ryan <davidryan@gmail.com>
+
 ## v0.1.0
 
 Initial release.
