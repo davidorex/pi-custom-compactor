@@ -1,8 +1,37 @@
 {
-  "name": "pi-custom-compactor",
+  "name": "@davidorex/pi-custom-compactor",
   "version": "0.1.0",
+  "description": "Declarative YAML-driven structured compaction for pi coding agent — multi-pass extraction, artifact persistence, budget management, and work-mode-specific compaction specs",
   "type": "module",
-  "keywords": ["pi-package"],
+  "license": "MIT",
+  "author": "David Ryan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/davidorex/pi-custom-compactor.git"
+  },
+  "homepage": "https://github.com/davidorex/pi-custom-compactor",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "compaction",
+    "context-management",
+    "coding-agent"
+  ],
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "seeds/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "release": "npx changelogen --bump --release",
+    "release:patch": "npx changelogen --bump --release --patch",
+    "release:minor": "npx changelogen --bump --release --minor",
+    "release:major": "npx changelogen --bump --release --major",
+    "release:push": "git push --follow-tags"
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
