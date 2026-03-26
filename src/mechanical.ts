@@ -1,4 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type {
+  UserMessage,
+  AssistantMessage,
+  ToolResultMessage,
+  TextContent,
+  ToolCall,
+} from "@mariozechner/pi-ai";
 import type { ExtractSpec } from "./types.js";
 
 /**
@@ -17,14 +24,15 @@ const CORRECTION_REGEX =
  */
 export function extractText(msg: AgentMessage): string {
   if (msg.role !== "user") return "";
-  const content = (msg as any).content;
+  const userMsg = msg as UserMessage;
+  const content = userMsg.content;
   if (!Array.isArray(content)) {
     if (typeof content === "string") return content;
     return "";
   }
   return content
-    .filter((block: any) => block?.type === "text" && typeof block.text === "string")
-    .map((block: any) => block.text)
+    .filter((block): block is TextContent => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
     .join("\n");
 }
 
@@ -67,12 +75,14 @@ export function extractFileOps(
   for (const msg of messages) {
     if (msg.role === "assistant") {
       // Look for tool calls in assistant messages
-      const content = (msg as any).content;
+      const assistantMsg = msg as AssistantMessage;
+      const content = assistantMsg.content;
       if (!Array.isArray(content)) continue;
       for (const block of content) {
-        if (block?.type !== "toolCall") continue;
-        const toolName = block.name ?? block.toolName;
-        const args = block.args ?? block.arguments ?? block.input;
+        if (block.type !== "toolCall") continue;
+        const toolCallBlock = block as ToolCall;
+        const toolName = toolCallBlock.name;
+        const args = toolCallBlock.arguments;
         if (!args) continue;
         const filePath = typeof args === "object" ? (args.path ?? args.file) : undefined;
         if (!filePath || typeof filePath !== "string") continue;
@@ -85,8 +95,9 @@ export function extractFileOps(
       }
     } else if (msg.role === "toolResult") {
       // Tool results can also indicate file operations
-      const toolName = (msg as any).toolName;
-      const filePath = (msg as any).details?.path;
+      const toolResultMsg = msg as ToolResultMessage;
+      const toolName = toolResultMsg.toolName;
+      const filePath = toolResultMsg.details?.path;
       if (filePath && typeof filePath === "string") {
         if (toolName === "read") {
           readSet.add(filePath);
