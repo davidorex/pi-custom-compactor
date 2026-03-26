@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.1.3
+
+[compare changes](https://github.com/davidorex/pi-custom-compactor/compare/v0.1.2...v0.1.3)
+
+### 🚀 Enhancements
+
+- Add /compaction-dry-run command for previewing compaction output ([12a5126](https://github.com/davidorex/pi-custom-compactor/commit/12a5126))
+
+### ❤️ Contributors
+
+- David Ryan <davidryan@gmail.com>
+
 ## v0.1.2
 
 [compare changes](https://github.com/davidorex/pi-custom-compactor/compare/v0.1.1...v0.1.2)
