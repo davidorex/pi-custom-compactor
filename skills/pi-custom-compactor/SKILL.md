@@ -26,6 +26,7 @@ Remove orphaned compaction artifacts
 - `session_start`
 - `session_switch`
 - `session_fork`
+- `session_tree`
 - `session_before_compact`
 - `context`
 </hooks>

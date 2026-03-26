@@ -112,8 +112,18 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // Reset event-bus override on branch switch and session fork so stale
-  // overrides from a previous branch do not persist.
+  // Shared helper: resolve spec with event-bus override, then fall back to disk resolution.
+  function resolveSpecWithOverride(cwd: string) {
+    if (activeSpecOverride) {
+      const specPath = path.join(cwd, ".pi", "compaction", `${activeSpecOverride}.yaml`);
+      const spec = loadAndValidateSpec(specPath);
+      if (spec) return { spec, name: activeSpecOverride, path: specPath };
+    }
+    return resolveSpec(cwd);
+  }
+
+  // Reset event-bus override on branch switch, fork, and tree navigation so
+  // stale overrides from a previous branch do not persist.
   pi.on("session_switch", async (_event, ctx) => {
     activeSpecOverride = null;
     cachedCwd = ctx.cwd;
@@ -122,29 +132,15 @@ export default function (pi: ExtensionAPI) {
     activeSpecOverride = null;
     cachedCwd = ctx.cwd;
   });
+  pi.on("session_tree", async (_event, ctx) => {
+    activeSpecOverride = null;
+    cachedCwd = ctx.cwd;
+  });
 
   // ─── Hook 1: session_before_compact ───────────────────────────────────
   pi.on("session_before_compact", async (event, ctx) => {
     try {
-      // Resolve spec, considering event bus override
-      let resolved = activeSpecOverride
-        ? (() => {
-            const specPath = path.join(
-              ctx.cwd,
-              ".pi",
-              "compaction",
-              `${activeSpecOverride}.yaml`,
-            );
-            const spec = loadAndValidateSpec(specPath);
-            if (spec) return { spec, name: activeSpecOverride!, path: specPath };
-            return null;
-          })()
-        : null;
-
-      if (!resolved) {
-        resolved = resolveSpec(ctx.cwd);
-      }
-
+      const resolved = resolveSpecWithOverride(ctx.cwd);
       if (!resolved) return undefined; // fall back to built-in
 
       const { preparation, signal } = event;
@@ -336,26 +332,7 @@ export default function (pi: ExtensionAPI) {
   // ─── Hook 2: context ──────────────────────────────────────────────────
   pi.on("context", async (event, ctx) => {
     try {
-      // Resolve spec, considering event bus override
-      let resolved = activeSpecOverride
-        ? (() => {
-            const specPath = path.join(
-              ctx.cwd,
-              ".pi",
-              "compaction",
-              `${activeSpecOverride}.yaml`,
-            );
-            const spec = loadAndValidateSpec(specPath);
-            if (spec)
-              return { spec, name: activeSpecOverride!, path: specPath };
-            return null;
-          })()
-        : null;
-
-      if (!resolved) {
-        resolved = resolveSpec(ctx.cwd);
-      }
-
+      const resolved = resolveSpecWithOverride(ctx.cwd);
       if (!resolved || !resolved.spec.reassemble) return;
 
       // Read artifacts

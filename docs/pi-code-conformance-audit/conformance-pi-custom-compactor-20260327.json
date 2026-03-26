@@ -1,0 +1,283 @@
+{
+  "subject": {
+    "project": "@davidorex/pi-custom-compactor",
+    "files": [
+      "src/index.ts",
+      "src/types.ts",
+      "src/spec.ts",
+      "src/mechanical.ts",
+      "src/llm-extract.ts",
+      "src/reassemble.ts",
+      "src/artifacts.ts",
+      "src/tokens.ts",
+      "src/stats.ts"
+    ],
+    "scope": "full"
+  },
+  "auditor": {
+    "name": "pi-code-conformance",
+    "version": "2.0",
+    "type": "hybrid"
+  },
+  "timestamp": "2026-03-27T00:00:00Z",
+  "checks": [
+    {
+      "id": "pkg-type-module",
+      "description": "package.json has type: module",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "pkg-pi-extensions",
+      "description": "pi.extensions manifest declared",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "pkg-pi-package-keyword",
+      "description": "pi-package keyword present",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "pkg-peer-pi-coding-agent",
+      "description": "peerDependency: @mariozechner/pi-coding-agent",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "pkg-peer-typebox",
+      "description": "peerDependency: @sinclair/typebox",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "pkg-no-dep-pi-coding-agent",
+      "description": "@mariozechner/pi-coding-agent not in dependencies (correct: peer only)",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "pkg-no-dep-pi-tui",
+      "description": "@mariozechner/pi-tui not in dependencies (correct: peer only)",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "pkg-no-dep-pi-ai",
+      "description": "@mariozechner/pi-ai not in dependencies (correct: peer only)",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "pkg-no-dep-typebox",
+      "description": "@sinclair/typebox not in dependencies (correct: peer only)",
+      "status": "pass",
+      "category": "package-structure"
+    },
+    {
+      "id": "import-no-dynamic",
+      "description": "No dynamic imports",
+      "status": "pass",
+      "category": "import-discipline"
+    },
+    {
+      "id": "type-no-any",
+      "description": "No explicit any types",
+      "status": "pass",
+      "category": "type-safety"
+    },
+    {
+      "id": "tool-no-union-literal",
+      "description": "No Type.Union+Type.Literal (StringEnum or not applicable)",
+      "status": "pass",
+      "category": "tool-registration"
+    },
+    {
+      "id": "doc-jsdoc-header",
+      "description": "JSDoc header in ./src/index.ts",
+      "status": "pass",
+      "category": "conventions"
+    }
+  ],
+  "findings": [
+    {
+      "id": "state-management-index-no-session-tree",
+      "severity": "warning",
+      "principle": "State Management",
+      "category": "state-management",
+      "description": "Extension handles session_switch and session_fork to reset activeSpecOverride, but does not handle session_tree. If the user navigates to a different branch in the session tree, the stale override from the previous branch persists. The session_tree event fires when the user picks a different branch (not just switch or fork), and the same reset logic should apply.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [117, 121],
+          "snippet": "  pi.on(\"session_switch\", async (_event, ctx) => {\n    activeSpecOverride = null;\n    cachedCwd = ctx.cwd;\n  });\n  pi.on(\"session_fork\", async (_event, ctx) => {\n    activeSpecOverride = null;\n    cachedCwd = ctx.cwd;\n  });"
+        }
+      ],
+      "fix": {
+        "suggestion": "Add a pi.on(\"session_tree\", ...) handler with the same reset logic: set activeSpecOverride = null and cachedCwd = ctx.cwd.",
+        "verify_method": "grep",
+        "verify_pattern": "session_tree"
+      }
+    },
+    {
+      "id": "state-management-index-closure-state-not-reconstructable",
+      "severity": "info",
+      "principle": "State Management",
+      "category": "state-management",
+      "description": "The extension maintains activeSpecOverride and cachedCwd as closure variables. These are ephemeral — if the pi process restarts, both are lost. This is acceptable because activeSpecOverride is a one-shot override (consumed on next compaction) and cachedCwd is re-populated on session_start. Persistent state (artifacts, stats, active pointer) lives on disk. Documenting this as intentional design, not a deficiency.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [62, 65],
+          "snippet": "  let activeSpecOverride: string | null = null;\n  // Cached cwd captured from session_start for use in getArgumentCompletions\n  // (which receives only a prefix argument, with no access to ctx).\n  let cachedCwd: string | null = null;"
+        }
+      ],
+      "fix": {
+        "suggestion": "No change needed. Ephemeral closure state is appropriate here — persistent state lives on disk as artifacts and pointer files. Documenting for future auditors.",
+        "verify_method": "inspect"
+      }
+    },
+    {
+      "id": "conventions-index-duplicate-spec-resolution",
+      "severity": "info",
+      "principle": "Convention Patterns",
+      "category": "conventions",
+      "description": "The override-aware spec resolution logic (check activeSpecOverride, then fall back to resolveSpec) is duplicated verbatim in session_before_compact (lines 130-146) and context (lines 340-357). Both construct the same IIFE with identical path building. A shared helper would reduce the duplication and prevent the two paths from diverging.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142],
+          "snippet": "      let resolved = activeSpecOverride\n        ? (() => {\n            const specPath = path.join(\n              ctx.cwd,\n              \".pi\",\n              \"compaction\",\n              `${activeSpecOverride}.yaml`,\n            );\n            const spec = loadAndValidateSpec(specPath);\n            if (spec) return { spec, name: activeSpecOverride!, path: specPath };\n            return null;\n          })()\n        : null;"
+        },
+        {
+          "file": "src/index.ts",
+          "lines": [340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353],
+          "snippet": "      let resolved = activeSpecOverride\n        ? (() => {\n            const specPath = path.join(\n              ctx.cwd,\n              \".pi\",\n              \"compaction\",\n              `${activeSpecOverride}.yaml`,\n            );\n            const spec = loadAndValidateSpec(specPath);\n            if (spec)\n              return { spec, name: activeSpecOverride!, path: specPath };\n            return null;\n          })()\n        : null;"
+        }
+      ],
+      "fix": {
+        "suggestion": "Extract a resolveSpecWithOverride(cwd: string, override: string | null) function that encapsulates the override-then-fallback logic. Call it from both hooks.",
+        "verify_method": "command",
+        "verify_command": "grep -c 'activeSpecOverride' src/index.ts | xargs test 6 -ge"
+      }
+    },
+    {
+      "id": "type-safety-index-event-handler-implicit-types",
+      "severity": "info",
+      "principle": "Type Safety",
+      "category": "type-safety",
+      "description": "Hook handler parameters (event, ctx) rely on inference from pi.on() overloads. This works correctly — the ExtensionAPI generic overloads for 'session_before_compact', 'context', etc. provide proper types. No explicit annotation needed. Documenting that type safety is maintained through inference, not explicit annotation.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [68, 127, 337],
+          "snippet": "  pi.on(\"session_start\", async (_event, ctx) => {\n  ...\n  pi.on(\"session_before_compact\", async (event, ctx) => {\n  ...\n  pi.on(\"context\", async (event, ctx) => {"
+        }
+      ],
+      "fix": {
+        "suggestion": "No change needed. Types are correctly inferred from pi.on() overloads for all hook handlers.",
+        "verify_method": "inspect"
+      }
+    },
+    {
+      "id": "error-signaling-na-no-tools",
+      "severity": "info",
+      "principle": "Error Signaling",
+      "category": "error-signaling",
+      "description": "This extension registers no tools (registerTool). It uses hooks (pi.on) and commands (registerCommand). Error signaling via throw vs return-content applies to tool execute() functions, which are absent here. Commands use ctx.ui.notify with appropriate severity levels ('error', 'warning', 'info'). Hooks return undefined on failure to fall back to built-in behavior.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [328, 329, 330, 331, 332],
+          "snippet": "    } catch (err) {\n      const message =\n        err instanceof Error ? err.message : \"Unknown compaction error\";\n      ctx.ui.notify(`Custom compaction failed: ${message}`, \"error\");\n      return undefined;\n    }"
+        }
+      ],
+      "fix": {
+        "suggestion": "No change needed. Error signaling principle applies to tool execute() functions. This extension correctly notifies errors via ctx.ui.notify and falls back to built-in compaction by returning undefined.",
+        "verify_method": "inspect"
+      }
+    },
+    {
+      "id": "tool-registration-na-no-tools",
+      "severity": "info",
+      "principle": "Tool Registration",
+      "category": "tool-registration",
+      "description": "This extension does not call registerTool(). It exposes functionality through hooks and commands only. Tool registration principle checks (execute signature, parameter schemas, promptSnippet) are not applicable.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [60],
+          "snippet": "export default function (pi: ExtensionAPI) {"
+        }
+      ],
+      "fix": {
+        "suggestion": "No change needed. Extension uses hooks and commands, not tools.",
+        "verify_method": "grep",
+        "verify_pattern": "registerTool"
+      }
+    },
+    {
+      "id": "output-truncation-na-no-tools",
+      "severity": "info",
+      "principle": "Output Truncation",
+      "category": "output-truncation",
+      "description": "No tool execute() functions produce output. Hooks return structured compaction data or undefined. Commands output via ctx.ui.notify which is length-limited by the TUI. The composeSummary output is budget-constrained via enforceBudget(). No truncation concern.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [320, 321, 322, 323, 324, 325, 326, 327],
+          "snippet": "      return {\n        compaction: {\n          summary,\n          firstKeptEntryId,\n          tokensBefore,\n          details,\n        },\n      };"
+        }
+      ],
+      "fix": {
+        "suggestion": "No change needed. All output is budget-constrained or goes through ctx.ui.notify.",
+        "verify_method": "inspect"
+      }
+    },
+    {
+      "id": "signal-handling-index-proper-checks",
+      "severity": "info",
+      "principle": "Signal Handling",
+      "category": "signal-handling",
+      "description": "signal.aborted is checked twice in session_before_compact: before each extract iteration (line 168) and before composing the summary (line 272). The signal is also passed through to runLlmExtract (line 229) which forwards it to the complete() call. This is correct signal handling for the long-running extraction loop.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [168, 272, 229],
+          "snippet": "        if (signal.aborted) return undefined;\n        ...\n        // (line 229) signal passed to runLlmExtract\n            signal,\n        ...\n      if (signal.aborted) return undefined;"
+        }
+      ],
+      "fix": {
+        "suggestion": "No change needed. Signal handling is thorough — checked in loop, checked before summary composition, and passed through to LLM calls.",
+        "verify_method": "grep",
+        "verify_pattern": "signal\\.aborted"
+      }
+    },
+    {
+      "id": "mode-awareness-index-no-blocking-ui",
+      "severity": "info",
+      "principle": "Mode Awareness",
+      "category": "mode-awareness",
+      "description": "All ctx.ui calls use notify() which is safe without hasUI guards (no-ops in non-UI modes). No blocking UI calls (select, confirm, input) are present anywhere in the extension. The extension degrades gracefully in print and JSON modes.",
+      "locations": [
+        {
+          "file": "src/index.ts",
+          "lines": [97, 207, 417, 524],
+          "snippet": "      ctx.ui.notify(\n        `Compaction specs initialized...`,\n        \"info\",\n      );\n      ...\n      ctx.ui.notify(`Skipping LLM extract...`, \"warning\");\n      ...\n      ctx.ui.notify(`Active: ${current}...`, \"info\");\n      ...\n      ctx.ui.notify(lines.join(\"\\n\"), \"info\");"
+        }
+      ],
+      "fix": {
+        "suggestion": "No change needed. All UI calls use notify() which is safe without guards.",
+        "verify_method": "command",
+        "verify_command": "grep -rn 'ctx\\.ui\\.\\(select\\|confirm\\|input\\)' src/ | wc -l | xargs test 0 -eq"
+      }
+    }
+  ],
+  "summary": {
+    "errors": 0,
+    "warnings": 1,
+    "infos": 8,
+    "pass_rate": "13/13"
+  }
+}
