@@ -14,22 +14,22 @@ export interface LlmExtractResult {
 }
 
 /**
- * Pick a cheap/fast model for summarization.
+ * Pick a model for summarization extraction.
  *
- * Tries Gemini Flash first, then Claude Haiku, then falls back to ctx.model.
+ * Tries to find a cheaper model (Claude Haiku) with a usable API key.
+ * Falls back to ctx.model — the session model already in use, which is
+ * guaranteed to have working authentication.
  * Returns null only if ctx.model is also undefined.
  */
-export function pickSummarizationModel(ctx: ExtensionContext): Model<any> | null {
-  const candidates: [string, string][] = [
-    ["google", "gemini-2.5-flash"],
-    ["anthropic", "claude-haiku"],
-  ];
-
-  for (const [provider, pattern] of candidates) {
-    const model = ctx.modelRegistry.find(provider, pattern);
-    if (model) return model;
+export async function pickSummarizationModel(ctx: ExtensionContext): Promise<Model<any> | null> {
+  // Try a cheaper model if available and authenticated
+  const haiku = ctx.modelRegistry.find("anthropic", "claude-haiku");
+  if (haiku) {
+    const apiKey = await ctx.modelRegistry.getApiKey(haiku);
+    if (apiKey) return haiku;
   }
 
+  // Fall back to the session model (already in use, already authenticated)
   return ctx.model ?? null;
 }
 

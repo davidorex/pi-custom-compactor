@@ -206,7 +206,7 @@ export default function (pi: ExtensionAPI) {
             trimmed: trimmed || undefined,
           };
         } else if (extract.strategy === "llm") {
-          const model = pickSummarizationModel(ctx);
+          const model = await pickSummarizationModel(ctx);
           if (!model) {
             ctx.ui.notify(
               `Skipping LLM extract "${name}": no model available`,
@@ -699,7 +699,7 @@ export default function (pi: ExtensionAPI) {
           continue;
         }
 
-        const model = pickSummarizationModel(ctx);
+        const model = await pickSummarizationModel(ctx);
         if (!model) {
           lines.push(`  ${name} (llm, priority: ${priority}) [SKIPPED: no model available]`);
           continue;
