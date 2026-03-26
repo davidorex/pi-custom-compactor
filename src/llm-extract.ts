@@ -9,6 +9,8 @@ import type { ExtractSpec } from "./types.js";
 export interface LlmExtractResult {
   data: unknown;
   usage?: { inputTokens: number; outputTokens: number };
+  /** Present when the extraction failed — carries the underlying error message. */
+  error?: string;
 }
 
 /**
@@ -147,7 +149,8 @@ export async function runLlmExtract(
       : undefined;
 
     return { data, usage };
-  } catch {
-    return null;
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { data: null, error: errorMsg };
   }
 }
