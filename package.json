@@ -21,11 +21,13 @@
     "src/**/*.ts",
     "!src/**/*.test.ts",
     "seeds/",
+    "skills/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
+    "generate-skills": "npx tsx scripts/generate-skills.ts",
     "release": "npx changelogen --bump --release",
     "release:patch": "npx changelogen --bump --release --patch",
     "release:minor": "npx changelogen --bump --release --minor",
@@ -35,6 +37,9 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "dependencies": {
