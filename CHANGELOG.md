@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.1.5
+
+[compare changes](https://github.com/davidorex/pi-custom-compactor/compare/v0.1.4...v0.1.5)
+
+### 🩹 Fixes
+
+- PickSummarizationModel now checks API key before selecting candidate ([22eb616](https://github.com/davidorex/pi-custom-compactor/commit/22eb616))
+
+### ❤️ Contributors
+
+- David Ryan <davidryan@gmail.com>
+
 ## v0.1.4
 
 [compare changes](https://github.com/davidorex/pi-custom-compactor/compare/v0.1.3...v0.1.4)
