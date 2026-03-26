@@ -40,7 +40,14 @@ interface EventBusRegistration {
 	channel: string;
 }
 
+interface ToolRegistration {
+	name: string;
+	description: string;
+	promptSnippet?: string;
+}
+
 interface Registrations {
+	tools: ToolRegistration[];
 	commands: CommandRegistration[];
 	events: EventRegistration[];
 	eventBus: EventBusRegistration[];
@@ -78,6 +85,7 @@ interface ParsedSpec {
 
 function createMockPi(): { mockPi: Record<string, unknown>; registrations: Registrations } {
 	const registrations: Registrations = {
+		tools: [],
 		commands: [],
 		events: [],
 		eventBus: [],
@@ -88,6 +96,13 @@ function createMockPi(): { mockPi: Record<string, unknown>; registrations: Regis
 	const mockPi = {
 		on(event: string, _handler: unknown) {
 			registrations.events.push({ event });
+		},
+		registerTool(config: { name?: string; description?: string; promptSnippet?: string }) {
+			registrations.tools.push({
+				name: config.name || "",
+				description: config.description || "",
+				promptSnippet: config.promptSnippet,
+			});
 		},
 		registerCommand(name: string, config: { description?: string }) {
 			registrations.commands.push({
@@ -101,7 +116,6 @@ function createMockPi(): { mockPi: Record<string, unknown>; registrations: Regis
 			},
 		},
 		// No-ops for other ExtensionAPI methods the factory might reference
-		registerTool: noop,
 		registerShortcut: noop,
 		sendMessage: noop,
 		registerMessageRenderer: noop,
@@ -264,6 +278,23 @@ function composeSkill(
 	}
 	lines.push("---");
 	lines.push("");
+
+	// ── Tools reference ──
+	if (registrations.tools.length > 0) {
+		lines.push("<tools_reference>");
+		for (const tool of registrations.tools) {
+			lines.push(`<tool name="${tool.name}">`);
+			lines.push(tool.description);
+			if (tool.promptSnippet) {
+				lines.push("");
+				lines.push(`*${tool.promptSnippet}*`);
+			}
+			lines.push(`</tool>`);
+			lines.push("");
+		}
+		lines.push("</tools_reference>");
+		lines.push("");
+	}
 
 	// ── Commands reference ──
 	if (registrations.commands.length > 0) {
@@ -470,6 +501,7 @@ async function main() {
 		console.log(`  Warning: extension factory threw (may be expected): ${msg}`);
 	}
 
+	console.log(`  Tools: ${registrations.tools.length}`);
 	console.log(`  Commands: ${registrations.commands.length}`);
 	console.log(`  Hooks: ${registrations.events.length}`);
 	console.log(`  Event bus: ${registrations.eventBus.length}`);

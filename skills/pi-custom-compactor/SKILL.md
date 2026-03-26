@@ -7,6 +7,15 @@ description: >
   debugging compaction budget and artifact growth.
 ---
 
+<tools_reference>
+<tool name="compaction_dry_run">
+Preview what compaction would produce without writing artifacts. Shows per-extract results, budget analysis, and summary preview.
+
+*Preview compaction output for the current session without writing anything*
+</tool>
+
+</tools_reference>
+
 <commands_reference>
 <command name="/compaction-use">
 Switch active compaction spec

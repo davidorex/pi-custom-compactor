@@ -23,8 +23,12 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildSessionContext,
+  type AgentToolResult,
+  type AgentToolUpdateCallback,
   type ExtensionAPI,
+  type ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import {
   resolveSpec,
   listSpecFiles,
@@ -586,6 +590,231 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ─── Shared: dry-run pipeline ────────────────────────────────────────
+  // Runs the full extract pipeline against current session messages and
+  // returns formatted output lines. No artifacts or stats are written.
+  // Throws on unrecoverable errors (no spec, no messages).
+  async function runDryRun(
+    ctx: ExtensionContext,
+    specName: string | undefined,
+    skipLlm: boolean,
+  ): Promise<string[]> {
+    // Resolve spec
+    let resolved;
+    if (specName) {
+      const specPath = path.join(ctx.cwd, ".pi", "compaction", `${specName}.yaml`);
+      const spec = loadAndValidateSpec(specPath);
+      if (!spec) throw new Error(`Spec not found or invalid: ${specName}`);
+      resolved = { spec, name: specName, path: specPath };
+    } else {
+      resolved = resolveSpecWithOverride(ctx.cwd);
+      if (!resolved) throw new Error("No compaction spec found.");
+    }
+
+    // Get messages from session
+    const sessionEntries = ctx.sessionManager.getEntries();
+    const leafId = ctx.sessionManager.getLeafId();
+    const sessionContext = buildSessionContext(sessionEntries, leafId);
+    const allMessages = sessionContext.messages;
+
+    if (allMessages.length === 0) throw new Error("No messages in session yet.");
+
+    const lines: string[] = [];
+    lines.push(`Compaction dry-run (spec: ${resolved.name}, ${resolved.path})`);
+    lines.push(`Messages: ${allMessages.length}`);
+    lines.push("");
+    lines.push("--- Extracts ---");
+
+    // Per-extract data for budget simulation
+    const extractResults: Array<{
+      name: string;
+      persist: string;
+      data: string;
+      tokens: number;
+      priority: string;
+    }> = [];
+
+    for (const [name, extract] of Object.entries(resolved.spec.extracts)) {
+      const artifactPath = resolveArtifactPath(extract.persist, ctx.cwd);
+      const priority = extract.priority ?? "normal";
+      lines.push("");
+
+      if (extract.strategy === "mechanical") {
+        const result = runMechanicalExtract(name, extract, allMessages);
+        const existing = readArtifact(artifactPath);
+        let merged = mergeArtifact(existing, result);
+        let trimmed = false;
+
+        const existingSerialized = existing != null ? JSON.stringify(existing) : null;
+        const existingTokens = existingSerialized ? estimateTokens(existingSerialized) : 0;
+        const existingEntries = Array.isArray(existing) ? existing.length : undefined;
+
+        if (extract.maxEntries != null) {
+          const capped = enforceMaxEntries(merged, extract.maxEntries);
+          merged = capped.data;
+          if (capped.trimmed) trimmed = true;
+        }
+        if (extract.maxTokens != null) {
+          const capped = enforceMaxTokens(merged, extract.maxTokens);
+          merged = capped.data;
+          if (capped.trimmed) trimmed = true;
+        }
+
+        const serialized = JSON.stringify(merged);
+        const mergedTokens = estimateTokens(serialized);
+        const mergedEntries = Array.isArray(merged) ? merged.length : undefined;
+
+        lines.push(`  ${name} (mechanical, priority: ${priority})`);
+        if (existingSerialized) {
+          lines.push(`    On disk:  ${existingEntries != null ? `${existingEntries} entries, ` : ""}${formatNumber(existingTokens)} tokens`);
+        } else {
+          lines.push(`    On disk:  (none)`);
+        }
+        lines.push(`    Merged:  ${mergedEntries != null ? `${mergedEntries} entries, ` : ""}${formatNumber(mergedTokens)} tokens`);
+
+        const capParts: string[] = [];
+        if (extract.maxEntries != null) capParts.push(`maxEntries: ${extract.maxEntries}`);
+        if (extract.maxTokens != null) capParts.push(`maxTokens: ${extract.maxTokens}`);
+        if (capParts.length > 0) {
+          lines.push(`    Caps (${capParts.join(", ")}): ${trimmed ? "trimmed" : "ok"}`);
+        }
+
+        lines.push(`    Preview: ${serialized.slice(0, 300)}${serialized.length > 300 ? "..." : ""}`);
+        extractResults.push({ name, persist: extract.persist, data: serialized, tokens: mergedTokens, priority });
+
+      } else if (extract.strategy === "llm") {
+        if (skipLlm) {
+          const existing = readArtifact(artifactPath);
+          const existingSerialized = existing != null ? JSON.stringify(existing) : null;
+          const existingTokens = existingSerialized ? estimateTokens(existingSerialized) : 0;
+
+          lines.push(`  ${name} (llm, priority: ${priority}) [SKIPPED: skip_llm]`);
+          if (existingSerialized) {
+            lines.push(`    On disk: ${formatNumber(existingTokens)} tokens`);
+            lines.push(`    Preview: ${existingSerialized.slice(0, 300)}${existingSerialized.length > 300 ? "..." : ""}`);
+            extractResults.push({ name, persist: extract.persist, data: existingSerialized, tokens: existingTokens, priority });
+          } else {
+            lines.push(`    On disk: (none)`);
+          }
+          continue;
+        }
+
+        const model = pickSummarizationModel(ctx);
+        if (!model) {
+          lines.push(`  ${name} (llm, priority: ${priority}) [SKIPPED: no model available]`);
+          continue;
+        }
+
+        const apiKey = await ctx.modelRegistry.getApiKey(model);
+        if (!apiKey) {
+          lines.push(`  ${name} (llm, priority: ${priority}) [SKIPPED: no API key for ${model.name}]`);
+          continue;
+        }
+
+        ctx.ui.setWorkingMessage(`Dry-run: extracting "${name}" via LLM...`);
+
+        const result = await runLlmExtract(name, extract, allMessages, model, apiKey);
+
+        if (!result || result.data == null) {
+          const detail = result?.error ? `: ${result.error}` : "";
+          lines.push(`  ${name} (llm, priority: ${priority}) [ERROR${detail}]`);
+          continue;
+        }
+
+        let data = result.data;
+        let trimmed = false;
+        if (extract.maxTokens != null) {
+          const capped = enforceMaxTokens(data, extract.maxTokens);
+          data = capped.data;
+          if (capped.trimmed) trimmed = true;
+        }
+
+        const serialized = JSON.stringify(data);
+        const dataTokens = estimateTokens(serialized);
+
+        lines.push(`  ${name} (llm, priority: ${priority})`);
+        lines.push(`    Extracted: ${formatNumber(dataTokens)} tokens`);
+        if (result.usage) {
+          lines.push(`    Cost: ${formatNumber(result.usage.inputTokens)} input + ${formatNumber(result.usage.outputTokens)} output tokens`);
+        }
+        if (extract.maxTokens != null) {
+          lines.push(`    Cap (maxTokens: ${extract.maxTokens}): ${trimmed ? "trimmed" : "ok"}`);
+        }
+        lines.push(`    Preview: ${serialized.slice(0, 300)}${serialized.length > 300 ? "..." : ""}`);
+        extractResults.push({ name, persist: extract.persist, data: serialized, tokens: dataTokens, priority });
+      }
+    }
+
+    ctx.ui.setWorkingMessage();
+
+    // Budget simulation
+    if (resolved.spec.reassemble) {
+      const reassemble = resolved.spec.reassemble;
+
+      const artifacts: Array<{
+        source: string;
+        as: string;
+        wrap: string;
+        data: string;
+        tokens: number;
+        priority: "critical" | "high" | "normal" | "low";
+      }> = [];
+
+      for (const source of reassemble.sources) {
+        const match = extractResults.find((r) => r.persist === source.source);
+        if (match) {
+          artifacts.push({
+            source: source.source,
+            as: source.as,
+            wrap: source.wrap,
+            data: match.data,
+            tokens: match.tokens,
+            priority: (match.priority as "critical" | "high" | "normal" | "low"),
+          });
+        }
+      }
+
+      const budgetResult = enforceBudget(
+        artifacts,
+        reassemble.budget,
+        reassemble.overflow,
+      );
+
+      const totalTokens = artifacts.reduce((sum, a) => sum + a.tokens, 0);
+
+      lines.push("");
+      lines.push("--- Budget ---");
+      lines.push("");
+      if (reassemble.budget != null) {
+        const pct = ((totalTokens / reassemble.budget) * 100).toFixed(1);
+        lines.push(`  Total: ${formatNumber(totalTokens)} / ${formatNumber(reassemble.budget)} tokens (${pct}%)`);
+      } else {
+        lines.push(`  Total: ${formatNumber(totalTokens)} tokens (no budget)`);
+      }
+      lines.push(`  Overflow: ${reassemble.overflow ?? "trim-lowest"}`);
+      lines.push(`  Dropped: ${budgetResult.dropped.length > 0 ? budgetResult.dropped.join(", ") : "none"}`);
+
+      const sections = budgetResult.artifacts.map(
+        (a) => `${a.as}\n\n<${a.wrap}>\n${a.data}\n</${a.wrap}>`,
+      );
+      const summaryPreview = sections.join("\n\n");
+      const summaryTokens = estimateTokens(summaryPreview);
+
+      lines.push("");
+      lines.push(`--- Summary Preview (${formatNumber(summaryTokens)} tokens) ---`);
+      lines.push("");
+      const maxPreview = 2000;
+      if (summaryPreview.length > maxPreview) {
+        lines.push(summaryPreview.slice(0, maxPreview));
+        lines.push(`... (truncated, full: ${formatNumber(summaryTokens)} tokens)`);
+      } else {
+        lines.push(summaryPreview);
+      }
+    }
+
+    return lines;
+  }
+
   // ─── Command: /compaction-dry-run ────────────────────────────────────
   pi.registerCommand("compaction-dry-run", {
     description: "Preview what compaction would produce without writing anything",
@@ -597,242 +826,57 @@ export default function (pi: ExtensionAPI) {
         .map((s) => ({ value: s, label: s }));
     },
     handler: async (args, ctx) => {
-      // Parse arguments: [spec-name] [--skip-llm]
       const tokens = args.trim().split(/\s+/).filter(Boolean);
       const skipLlm = tokens.includes("--skip-llm");
       const specName = tokens.find((t) => !t.startsWith("--"));
-
-      // Resolve spec
-      let resolved;
-      if (specName) {
-        const specPath = path.join(ctx.cwd, ".pi", "compaction", `${specName}.yaml`);
-        const spec = loadAndValidateSpec(specPath);
-        if (!spec) {
-          ctx.ui.notify(`Spec not found or invalid: ${specName}`, "error");
-          return;
-        }
-        resolved = { spec, name: specName, path: specPath };
-      } else {
-        resolved = resolveSpecWithOverride(ctx.cwd);
-        if (!resolved) {
-          ctx.ui.notify("No compaction spec found.", "error");
-          return;
-        }
+      try {
+        const lines = await runDryRun(ctx, specName, skipLlm);
+        const output = lines.join("\n");
+        // Inject into LLM context so the model can see the results
+        pi.sendMessage({
+          customType: "compaction-dry-run",
+          content: output,
+          display: true,
+        });
+      } catch (err) {
+        ctx.ui.notify(err instanceof Error ? err.message : String(err), "error");
       }
+    },
+  });
 
-      // Get messages from session
-      const entries = ctx.sessionManager.getEntries();
-      const leafId = ctx.sessionManager.getLeafId();
-      const sessionContext = buildSessionContext(entries, leafId);
-      const allMessages = sessionContext.messages;
-
-      if (allMessages.length === 0) {
-        ctx.ui.notify("No messages in session yet.", "info");
-        return;
-      }
-
-      const lines: string[] = [];
-      lines.push(`Compaction dry-run (spec: ${resolved.name}, ${resolved.path})`);
-      lines.push(`Messages: ${allMessages.length}`);
-      lines.push("");
-      lines.push("--- Extracts ---");
-
-      // Per-extract data for budget simulation
-      const extractResults: Array<{
-        name: string;
-        persist: string;
-        data: string;
-        tokens: number;
-        priority: string;
-      }> = [];
-
-      for (const [name, extract] of Object.entries(resolved.spec.extracts)) {
-        const artifactPath = resolveArtifactPath(extract.persist, ctx.cwd);
-        const priority = extract.priority ?? "normal";
-        lines.push("");
-
-        if (extract.strategy === "mechanical") {
-          const result = runMechanicalExtract(name, extract, allMessages);
-          const existing = readArtifact(artifactPath);
-          let merged = mergeArtifact(existing, result);
-          let trimmed = false;
-
-          // Read existing stats for delta
-          const existingSerialized = existing != null ? JSON.stringify(existing) : null;
-          const existingTokens = existingSerialized ? estimateTokens(existingSerialized) : 0;
-          const existingEntries = Array.isArray(existing) ? existing.length : undefined;
-
-          // Apply caps
-          if (extract.maxEntries != null) {
-            const capped = enforceMaxEntries(merged, extract.maxEntries);
-            merged = capped.data;
-            if (capped.trimmed) trimmed = true;
-          }
-          if (extract.maxTokens != null) {
-            const capped = enforceMaxTokens(merged, extract.maxTokens);
-            merged = capped.data;
-            if (capped.trimmed) trimmed = true;
-          }
-
-          const serialized = JSON.stringify(merged);
-          const mergedTokens = estimateTokens(serialized);
-          const mergedEntries = Array.isArray(merged) ? merged.length : undefined;
-
-          lines.push(`  ${name} (mechanical, priority: ${priority})`);
-          if (existingSerialized) {
-            lines.push(`    On disk:  ${existingEntries != null ? `${existingEntries} entries, ` : ""}${formatNumber(existingTokens)} tokens`);
-          } else {
-            lines.push(`    On disk:  (none)`);
-          }
-          lines.push(`    Merged:  ${mergedEntries != null ? `${mergedEntries} entries, ` : ""}${formatNumber(mergedTokens)} tokens`);
-
-          // Cap status
-          const capParts: string[] = [];
-          if (extract.maxEntries != null) capParts.push(`maxEntries: ${extract.maxEntries}`);
-          if (extract.maxTokens != null) capParts.push(`maxTokens: ${extract.maxTokens}`);
-          if (capParts.length > 0) {
-            lines.push(`    Caps (${capParts.join(", ")}): ${trimmed ? "trimmed" : "ok"}`);
-          }
-
-          lines.push(`    Preview: ${serialized.slice(0, 300)}${serialized.length > 300 ? "..." : ""}`);
-
-          extractResults.push({ name, persist: extract.persist, data: serialized, tokens: mergedTokens, priority });
-
-        } else if (extract.strategy === "llm") {
-          if (skipLlm) {
-            // Fall back to existing artifact on disk
-            const existing = readArtifact(artifactPath);
-            const existingSerialized = existing != null ? JSON.stringify(existing) : null;
-            const existingTokens = existingSerialized ? estimateTokens(existingSerialized) : 0;
-
-            lines.push(`  ${name} (llm, priority: ${priority}) [SKIPPED: --skip-llm]`);
-            if (existingSerialized) {
-              lines.push(`    On disk: ${formatNumber(existingTokens)} tokens`);
-              lines.push(`    Preview: ${existingSerialized.slice(0, 300)}${existingSerialized.length > 300 ? "..." : ""}`);
-              extractResults.push({ name, persist: extract.persist, data: existingSerialized, tokens: existingTokens, priority });
-            } else {
-              lines.push(`    On disk: (none)`);
-            }
-            continue;
-          }
-
-          const model = pickSummarizationModel(ctx);
-          if (!model) {
-            lines.push(`  ${name} (llm, priority: ${priority}) [SKIPPED: no model available]`);
-            continue;
-          }
-
-          const apiKey = await ctx.modelRegistry.getApiKey(model);
-          if (!apiKey) {
-            lines.push(`  ${name} (llm, priority: ${priority}) [SKIPPED: no API key for ${model.name}]`);
-            continue;
-          }
-
-          ctx.ui.setWorkingMessage(`Dry-run: extracting "${name}" via LLM...`);
-
-          const result = await runLlmExtract(name, extract, allMessages, model, apiKey);
-
-          if (!result || result.data == null) {
-            const detail = result?.error ? `: ${result.error}` : "";
-            lines.push(`  ${name} (llm, priority: ${priority}) [ERROR${detail}]`);
-            continue;
-          }
-
-          let data = result.data;
-          let trimmed = false;
-          if (extract.maxTokens != null) {
-            const capped = enforceMaxTokens(data, extract.maxTokens);
-            data = capped.data;
-            if (capped.trimmed) trimmed = true;
-          }
-
-          const serialized = JSON.stringify(data);
-          const dataTokens = estimateTokens(serialized);
-
-          lines.push(`  ${name} (llm, priority: ${priority})`);
-          lines.push(`    Extracted: ${formatNumber(dataTokens)} tokens`);
-          if (result.usage) {
-            lines.push(`    Cost: ${formatNumber(result.usage.inputTokens)} input + ${formatNumber(result.usage.outputTokens)} output tokens`);
-          }
-          if (extract.maxTokens != null) {
-            lines.push(`    Cap (maxTokens: ${extract.maxTokens}): ${trimmed ? "trimmed" : "ok"}`);
-          }
-          lines.push(`    Preview: ${serialized.slice(0, 300)}${serialized.length > 300 ? "..." : ""}`);
-
-          extractResults.push({ name, persist: extract.persist, data: serialized, tokens: dataTokens, priority });
-        }
-      }
-
-      ctx.ui.setWorkingMessage();
-
-      // Budget simulation
-      if (resolved.spec.reassemble) {
-        const reassemble = resolved.spec.reassemble;
-
-        // Build ReassembledArtifact[] from dry-run data, matching sources to extracts
-        const artifacts: Array<{
-          source: string;
-          as: string;
-          wrap: string;
-          data: string;
-          tokens: number;
-          priority: "critical" | "high" | "normal" | "low";
-        }> = [];
-
-        for (const source of reassemble.sources) {
-          const match = extractResults.find((r) => r.persist === source.source);
-          if (match) {
-            artifacts.push({
-              source: source.source,
-              as: source.as,
-              wrap: source.wrap,
-              data: match.data,
-              tokens: match.tokens,
-              priority: (match.priority as "critical" | "high" | "normal" | "low"),
-            });
-          }
-        }
-
-        const budgetResult = enforceBudget(
-          artifacts,
-          reassemble.budget,
-          reassemble.overflow,
-        );
-
-        const totalTokens = artifacts.reduce((sum, a) => sum + a.tokens, 0);
-
-        lines.push("");
-        lines.push("--- Budget ---");
-        lines.push("");
-        if (reassemble.budget != null) {
-          const pct = ((totalTokens / reassemble.budget) * 100).toFixed(1);
-          lines.push(`  Total: ${formatNumber(totalTokens)} / ${formatNumber(reassemble.budget)} tokens (${pct}%)`);
-        } else {
-          lines.push(`  Total: ${formatNumber(totalTokens)} tokens (no budget)`);
-        }
-        lines.push(`  Overflow: ${reassemble.overflow ?? "trim-lowest"}`);
-        lines.push(`  Dropped: ${budgetResult.dropped.length > 0 ? budgetResult.dropped.join(", ") : "none"}`);
-
-        // Summary preview
-        const sections = budgetResult.artifacts.map(
-          (a) => `${a.as}\n\n<${a.wrap}>\n${a.data}\n</${a.wrap}>`,
-        );
-        const summaryPreview = sections.join("\n\n");
-        const summaryTokens = estimateTokens(summaryPreview);
-
-        lines.push("");
-        lines.push(`--- Summary Preview (${formatNumber(summaryTokens)} tokens) ---`);
-        lines.push("");
-        const maxPreview = 2000;
-        if (summaryPreview.length > maxPreview) {
-          lines.push(summaryPreview.slice(0, maxPreview));
-          lines.push(`... (truncated, full: ${formatNumber(summaryTokens)} tokens)`);
-        } else {
-          lines.push(summaryPreview);
-        }
-      }
-
-      ctx.ui.notify(lines.join("\n"), "info");
+  // ─── Tool: compaction_dry_run ──────────────────────────────────────
+  pi.registerTool({
+    name: "compaction_dry_run",
+    label: "Compaction Dry Run",
+    description:
+      "Preview what compaction would produce without writing artifacts. " +
+      "Shows per-extract results, budget analysis, and summary preview.",
+    promptSnippet:
+      "Preview compaction output for the current session without writing anything",
+    promptGuidelines: [
+      "Use this tool to see what the active compaction spec would extract from the current conversation",
+      "Use skip_llm: true to avoid token cost when only checking mechanical extracts and budget math",
+      "The result shows per-extract data, budget usage, and the composed summary preview",
+    ],
+    parameters: Type.Object({
+      spec: Type.Optional(
+        Type.String({ description: "Spec name to preview (omit for active spec)" }),
+      ),
+      skip_llm: Type.Optional(
+        Type.Boolean({ description: "Skip LLM extracts to avoid token cost (default: false)" }),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { spec?: string; skip_llm?: boolean },
+      _signal: AbortSignal | undefined,
+      _onUpdate: AgentToolUpdateCallback | undefined,
+      ctx: ExtensionContext,
+    ): Promise<AgentToolResult> {
+      const lines = await runDryRun(ctx, params.spec, params.skip_llm ?? false);
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+      };
     },
   });
 }
