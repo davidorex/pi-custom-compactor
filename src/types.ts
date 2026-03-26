@@ -56,7 +56,7 @@ export interface CompactionSpec {
 /** Per-artifact stats recorded after compaction. */
 export interface ArtifactStats {
   path: string;
-  /** Estimated tokens (chars/4 heuristic). */
+  /** Estimated token count. */
   tokens: number;
   /** Raw file size in bytes. */
   sizeBytes: number;
