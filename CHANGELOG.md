@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.1.4
+
+[compare changes](https://github.com/davidorex/pi-custom-compactor/compare/v0.1.3...v0.1.4)
+
+### 🚀 Enhancements
+
+- Add compaction_dry_run tool for LLM-invocable dry-run + inject command output into LLM context ([b1f3d21](https://github.com/davidorex/pi-custom-compactor/commit/b1f3d21))
+
+### ❤️ Contributors
+
+- David Ryan <davidryan@gmail.com>
+
 ## v0.1.3
 
 [compare changes](https://github.com/davidorex/pi-custom-compactor/compare/v0.1.2...v0.1.3)
