@@ -1,5 +1,25 @@
+/**
+ * pi-custom-compactor — YAML-driven structured compaction extension for Pi.
+ *
+ * Replaces Pi's built-in compaction with a configurable pipeline that extracts
+ * artifacts (mechanical or LLM-based) according to a YAML spec, persists them
+ * to disk, and reassembles them into context on each turn.
+ *
+ * Hooks:
+ *   session_start       — bootstraps seed compaction specs on first use
+ *   session_before_compact — runs the extract pipeline, writes artifacts, composes summary
+ *   session_switch      — resets event-bus spec override on branch switch
+ *   session_fork        — resets event-bus spec override on session fork
+ *   context             — injects reassembled artifacts and stats into the context
+ *
+ * Commands:
+ *   /compaction-use     — switch active compaction spec (with tab completion)
+ *   /compaction-stats   — display compaction statistics and trends
+ *   /compaction-clean   — remove orphaned compaction artifacts
+ */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   resolveSpec,
@@ -40,9 +60,13 @@ import type {
 export default function (pi: ExtensionAPI) {
   // Mutable state for event bus override
   let activeSpecOverride: string | null = null;
+  // Cached cwd captured from session_start for use in getArgumentCompletions
+  // (which receives only a prefix argument, with no access to ctx).
+  let cachedCwd: string | null = null;
 
   // ─── Hook 0: session_start — bootstrap seed specs on first use ──────
   pi.on("session_start", async (_event, ctx) => {
+    cachedCwd = ctx.cwd;
     try {
       // Check if any spec exists via resolution
       const existing = resolveSpec(ctx.cwd);
@@ -53,7 +77,7 @@ export default function (pi: ExtensionAPI) {
       if (fs.existsSync(compactionDir)) return; // Directory exists, user is managing it
 
       // Bootstrap: copy seeds to .pi/compaction/
-      const seedsDir = new URL("../seeds", import.meta.url).pathname;
+      const seedsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "seeds");
       if (!fs.existsSync(seedsDir)) return; // Seeds not found (shouldn't happen)
 
       fs.mkdirSync(compactionDir, { recursive: true });
@@ -83,9 +107,20 @@ export default function (pi: ExtensionAPI) {
 
   // Event bus listener for workflow integration
   pi.events.on("workflow:compaction", (data: unknown) => {
-    if (data && typeof data === "object" && "spec" in data && typeof (data as any).spec === "string") {
+    if (data && typeof data === "object" && "spec" in data && typeof (data as { spec: unknown }).spec === "string") {
       activeSpecOverride = (data as { spec: string }).spec;
     }
+  });
+
+  // Reset event-bus override on branch switch and session fork so stale
+  // overrides from a previous branch do not persist.
+  pi.on("session_switch", async (_event, ctx) => {
+    activeSpecOverride = null;
+    cachedCwd = ctx.cwd;
+  });
+  pi.on("session_fork", async (_event, ctx) => {
+    activeSpecOverride = null;
+    cachedCwd = ctx.cwd;
   });
 
   // ─── Hook 1: session_before_compact ───────────────────────────────────
@@ -194,9 +229,10 @@ export default function (pi: ExtensionAPI) {
             signal,
           );
 
-          if (!result) {
+          if (!result || result.data == null) {
+            const detail = result?.error ? `: ${result.error}` : "";
             ctx.ui.notify(
-              `LLM extract "${name}" returned no result`,
+              `LLM extract "${name}" returned no result${detail}`,
               "warning",
             );
             continue;
@@ -352,7 +388,7 @@ export default function (pi: ExtensionAPI) {
           role: "user" as const,
           content: [{ type: "text" as const, text: statsSummary }],
           timestamp: 0,
-        } as any);
+        });
       }
 
       if (synthetic.length === 0) return;
@@ -368,7 +404,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("compaction-use", {
     description: "Switch active compaction spec",
     getArgumentCompletions: (prefix) => {
-      const specs = listSpecFiles(process.cwd());
+      if (!cachedCwd) return [];
+      const specs = listSpecFiles(cachedCwd);
       return specs
         .filter((s) => s.startsWith(prefix))
         .map((s) => ({ value: s, label: s }));
