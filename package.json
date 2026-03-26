@@ -2,6 +2,7 @@
   "name": "pi-custom-compactor",
   "version": "0.1.0",
   "type": "module",
+  "keywords": ["pi-package"],
   "pi": {
     "extensions": [
       "./src/index.ts"
@@ -9,6 +10,11 @@
   },
   "dependencies": {
     "yaml": "^2.7.1"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*",
+    "@sinclair/typebox": "*"
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "*",
