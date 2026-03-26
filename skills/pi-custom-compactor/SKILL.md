@@ -20,6 +20,10 @@ Show compaction statistics and trends
 Remove orphaned compaction artifacts
 </command>
 
+<command name="/compaction-dry-run">
+Preview what compaction would produce without writing anything
+</command>
+
 </commands_reference>
 
 <hooks>
