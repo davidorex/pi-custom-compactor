@@ -1,6 +1,6 @@
 {
   "name": "@davidorex/pi-custom-compactor",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Declarative YAML-driven structured compaction for pi coding agent — multi-pass extraction, artifact persistence, budget management, and work-mode-specific compaction specs",
   "type": "module",
   "license": "MIT",

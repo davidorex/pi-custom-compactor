@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.1.2
+
+[compare changes](https://github.com/davidorex/pi-custom-compactor/compare/v0.1.1...v0.1.2)
+
+### ✨ Features
+
+- Auto-generated SKILL.md via build-time introspection of extension registrations ([ff09022](https://github.com/davidorex/pi-custom-compactor/commit/ff09022))
+  - `scripts/generate-skills.ts` introspects extension factory with mock pi, parses seed YAML vocabulary, splices hand-authored `skill-narrative.md`
+  - Generates `skills/pi-custom-compactor/SKILL.md` with XML-tagged sections, activation-first description
+  - Reference files: `bundled-resources.md`, `spec-vocabulary.md` with per-spec extract tables and format schemas
+  - `package.json`: added `pi.skills`, `generate-skills` script, `skills/` in files array
+
+### 🩹 Fixes
+
+- Add `session_tree` handler to reset stale `activeSpecOverride` on branch navigation ([dcd8c28](https://github.com/davidorex/pi-custom-compactor/commit/dcd8c28))
+- Extract `resolveSpecWithOverride()` shared helper, eliminating duplicate 13-line IIFEs in `session_before_compact` and `context` hooks ([dcd8c28](https://github.com/davidorex/pi-custom-compactor/commit/dcd8c28))
+
+### 🏡 Chore
+
+- Add .claude/, .project/, .workflows/ to gitignore ([484ef66](https://github.com/davidorex/pi-custom-compactor/commit/484ef66))
+
+### ❤️ Contributors
+
+- David Ryan <davidryan@gmail.com>
+
 ## v0.1.1
 
 
